@@ -1,40 +1,81 @@
-const pool = require('../config/db');
+const { db } = require('../models/db');
+const { User } = db;
+const { handleSequelizeError } = require('../utils/sequelize');
 
+// ── Get authenticated user profile ──────────────────────────────────────
 // GET /api/users/me
 exports.getMe = async (req, res, next) => {
   try {
-    const [rows] = await pool.query('SELECT id, email, name, phone, bio, avatar, role, activities, created_at FROM users WHERE id = ?', [req.user.id]);
-    if (rows.length === 0) return res.status(404).json({ error: 'Utilisateur introuvable' });
-    res.json(rows[0]);
-  } catch (err) { next(err); }
+    const user = await User.findByPk(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ error: 'Utilisateur introuvable' });
+    }
+
+    res.json(user.toJSON());
+  } catch (err) {
+    next(err);
+  }
 };
 
+// ── Update authenticated user profile ───────────────────────────────────
 // PUT /api/users/me
 exports.updateMe = async (req, res, next) => {
   try {
     const { name, phone, bio, avatar, activities } = req.body;
-    await pool.query(
-      'UPDATE users SET name = COALESCE(?, name), phone = COALESCE(?, phone), bio = COALESCE(?, bio), avatar = COALESCE(?, avatar), activities = COALESCE(?, activities) WHERE id = ?',
-      [name, phone, bio, avatar, activities ? JSON.stringify(activities) : null, req.user.id]
-    );
-    const [rows] = await pool.query('SELECT id, email, name, phone, bio, avatar, role, activities, created_at FROM users WHERE id = ?', [req.user.id]);
-    res.json(rows[0]);
-  } catch (err) { next(err); }
+    const user = await User.findByPk(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ error: 'Utilisateur introuvable' });
+    }
+
+    // Update only provided fields
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (phone !== undefined) updateData.phone = phone;
+    if (bio !== undefined) updateData.bio = bio;
+    if (avatar !== undefined) updateData.avatar = avatar;
+    if (activities !== undefined) updateData.activities = activities;
+
+    await user.update(updateData, { validate: true });
+
+    res.json(user.toJSON());
+  } catch (err) {
+    const error = handleSequelizeError(err);
+    return res.status(error.statusCode).json({
+      error: error.message,
+      details: error.details,
+    });
+  }
 };
 
-// GET /api/users  (admin)
+// ── List all users (admin) ──────────────────────────────────────────────
+// GET /api/users
 exports.getAll = async (req, res, next) => {
   try {
-    const [rows] = await pool.query('SELECT id, email, name, phone, avatar, role, created_at FROM users ORDER BY created_at DESC');
-    res.json(rows);
-  } catch (err) { next(err); }
+    const users = await User.findAll({
+      attributes: ['id', 'email', 'name', 'phone', 'avatar', 'role', 'createdAt'],
+      order: [['createdAt', 'DESC']],
+    });
+
+    res.json(users.map(u => u.toJSON()));
+  } catch (err) {
+    next(err);
+  }
 };
 
-// GET /api/users/:id  (admin)
+// ── Get user by ID (admin) ───────────────────────────────────────────────
+// GET /api/users/:id
 exports.getById = async (req, res, next) => {
   try {
-    const [rows] = await pool.query('SELECT id, email, name, phone, bio, avatar, role, activities, created_at FROM users WHERE id = ?', [req.params.id]);
-    if (rows.length === 0) return res.status(404).json({ error: 'Utilisateur introuvable' });
-    res.json(rows[0]);
-  } catch (err) { next(err); }
+    const user = await User.findByPk(req.params.id);
+
+    if (!user) {
+      return res.status(404).json({ error: 'Utilisateur introuvable' });
+    }
+
+    res.json(user.toJSON());
+  } catch (err) {
+    next(err);
+  }
 };

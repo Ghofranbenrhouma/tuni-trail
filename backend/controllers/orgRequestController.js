@@ -5,6 +5,20 @@ exports.submit = async (req, res, next) => {
   try {
     const { first_name, last_name, email, phone, description, document_name, document_data } = req.body;
 
+    // Validate required fields
+    const required = { first_name, last_name, email, phone, description };
+    for (const [key, value] of Object.entries(required)) {
+      if (!value || typeof value !== 'string' || value.trim() === '') {
+        return res.status(400).json({ error: `${key} requis et ne peut pas être vide` });
+      }
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Format email invalide' });
+    }
+
     // Check for existing pending request
     const [existing] = await pool.query(
       "SELECT id FROM org_requests WHERE user_id = ? AND status = 'pending'",
@@ -33,7 +47,7 @@ exports.getMine = async (req, res, next) => {
       'SELECT * FROM org_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 1',
       [req.user.id]
     );
-    res.json(rows[0] || null);
+    res.json({ success: true, data: rows[0] || null });
   } catch (err) { next(err); }
 };
 

@@ -1,40 +1,55 @@
-const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const pool = require('../config/db');
+const { db } = require('../models/db');
+const { User } = db;
+const { handleSequelizeError } = require('../utils/sequelize');
 
+// ── Register ────────────────────────────────────────────────────────────
 // POST /api/auth/register
 exports.register = async (req, res, next) => {
   try {
     const { email, password, name, role } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Email et mot de passe requis' });
 
-    // Check existing
-    const [existing] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
-    if (existing.length > 0) return res.status(409).json({ error: 'Email déjà utilisé' });
+    // Validation
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email et mot de passe requis' });
+    }
 
-    const hash = await bcrypt.hash(password, 10);
-    const avatar = (name || 'A').slice(0, 2).toUpperCase();
-    const userRole = role || 'user';
-
-    const [result] = await pool.query(
-      'INSERT INTO users (email, password, name, avatar, role) VALUES (?, ?, ?, ?, ?)',
-      [email, hash, name || 'Aventurier', avatar, userRole]
+    // Create user (Sequelize will handle unique constraint)
+    const user = await User.create(
+      {
+        email,
+        password,
+        name: name || 'Aventurier',
+        avatar: (name || 'A').slice(0, 2).toUpperCase(),
+        role: role || 'user',
+      },
+      { validate: true } // Run validations
     );
 
+    // Generate token
     const token = jwt.sign(
-      { id: result.insertId, email, role: userRole },
+      { id: user.id, email: user.email, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
+    // Return user without password
     res.status(201).json({
       success: true,
       token,
-      user: { id: result.insertId, email, name: name || 'Aventurier', avatar, role: userRole },
+      user: user.toJSON(),
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    // Handle Sequelize errors
+    const error = handleSequelizeError(err);
+    return res.status(error.statusCode).json({
+      error: error.message,
+      details: error.details,
+    });
+  }
 };
 
+// ── Login ────────────────────────────────────────────────────────────────
 // POST /api/auth/login
 exports.login = async (req, res, next) => {
   try {
@@ -43,23 +58,40 @@ exports.login = async (req, res, next) => {
     // Demo login (no credentials)
     if (!email && !password && role) {
       const demoEmail = role === 'org' ? 'org@demo.com' : 'user@demo.com';
-      const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [demoEmail]);
-      if (rows.length === 0) return res.status(404).json({ error: 'Compte démo introuvable' });
+      const user = await User.findOne({ where: { email: demoEmail } });
 
-      const u = rows[0];
-      const token = jwt.sign({ id: u.id, email: u.email, role: u.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
-      const { password: _, ...safe } = u;
-      return res.json({ success: true, token, user: safe });
+      if (!user) {
+        return res.status(404).json({ error: 'Compte démo introuvable' });
+      }
+
+      const token = jwt.sign(
+        { id: user.id, email: user.email, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+
+      return res.json({
+        success: true,
+        token,
+        user: user.toJSON(),
+      });
     }
 
-    if (!email || !password) return res.status(400).json({ error: 'Email et mot de passe requis' });
+    // Standard login
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email et mot de passe requis' });
+    }
 
-    const [rows] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
-    if (rows.length === 0) return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
+    const user = await User.findOne({ where: { email } });
 
-    const user = rows[0];
-    const match = await bcrypt.compare(password, user.password);
-    if (!match) return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
+    if (!user) {
+      return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
+    }
+
+    const passwordMatch = await user.validatePassword(password);
+    if (!passwordMatch) {
+      return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
+    }
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
@@ -67,7 +99,16 @@ exports.login = async (req, res, next) => {
       { expiresIn: '7d' }
     );
 
-    const { password: _, ...safe } = user;
-    res.json({ success: true, token, user: safe });
-  } catch (err) { next(err); }
+    res.json({
+      success: true,
+      token,
+      user: user.toJSON(),
+    });
+  } catch (err) {
+    const error = handleSequelizeError(err);
+    return res.status(error.statusCode).json({
+      error: error.message,
+      details: error.details,
+    });
+  }
 };

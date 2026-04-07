@@ -18,7 +18,19 @@ exports.getByEvent = async (req, res, next) => {
 exports.create = async (req, res, next) => {
   try {
     const { event_id, rating, comment } = req.body;
-    if (!event_id || !rating) return res.status(400).json({ error: 'event_id et rating requis' });
+    if (!event_id) return res.status(400).json({ error: 'event_id requis' });
+    if (!rating || typeof rating !== 'number' || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: 'Rating doit être un nombre entre 1 et 5' });
+    }
+
+    // Check for duplicate review (same user, same event)
+    const [existing] = await pool.query(
+      'SELECT id FROM reviews WHERE user_id = ? AND event_id = ?',
+      [req.user.id, event_id]
+    );
+    if (existing.length > 0) {
+      return res.status(409).json({ error: 'Vous avez déjà évalué cet événement' });
+    }
 
     const [result] = await pool.query(
       'INSERT INTO reviews (user_id, event_id, user_name, rating, comment) VALUES (?, ?, ?, ?, ?)',
@@ -59,6 +71,11 @@ exports.getReported = async (req, res, next) => {
 exports.moderate = async (req, res, next) => {
   try {
     const { action } = req.body; // 'approve' or 'delete'
+    
+    if (!['approve', 'delete'].includes(action)) {
+      return res.status(400).json({ error: 'Action doit être "approve" ou "delete"' });
+    }
+    
     const newStatus = action === 'approve' ? 'published' : 'deleted';
     await pool.query('UPDATE reviews SET status = ? WHERE id = ?', [newStatus, req.params.id]);
     res.json({ success: true, status: newStatus });

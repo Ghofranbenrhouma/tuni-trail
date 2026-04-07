@@ -10,7 +10,7 @@ exports.get = async (req, res, next) => {
        WHERE ci.user_id = ?`,
       [req.user.id]
     );
-    res.json(rows);
+    res.json({ success: true, data: rows });
   } catch (err) { next(err); }
 };
 
@@ -31,8 +31,19 @@ exports.add = async (req, res, next) => {
 // PUT /api/cart/:id
 exports.updateQty = async (req, res, next) => {
   try {
-    const { quantity } = req.body;
-    if (quantity <= 0) {
+    let { quantity } = req.body;
+    
+    // Validate quantity
+    if (quantity === undefined || quantity === null) {
+      return res.status(400).json({ error: 'Quantity requis' });
+    }
+    
+    quantity = parseInt(quantity, 10);
+    if (isNaN(quantity) || quantity < 0) {
+      return res.status(400).json({ error: 'Quantity doit être un nombre positif' });
+    }
+
+    if (quantity === 0) {
       await pool.query('DELETE FROM cart_items WHERE id = ? AND user_id = ?', [req.params.id, req.user.id]);
     } else {
       await pool.query('UPDATE cart_items SET quantity = ? WHERE id = ? AND user_id = ?', [quantity, req.params.id, req.user.id]);
