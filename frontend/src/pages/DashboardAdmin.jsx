@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { reservationsApi, eventsApi } from '../services/api'
 import { EVENTS, BOOKINGS_TABLE, EVLIST } from '../utils/data'
-import { RESERVATIONS_KEY_PREFIX } from '../context/ReservationsContext'
 
 /* ── Simulated data ── */
 const REPORTED_REVIEWS = [
@@ -39,16 +39,6 @@ const TABS = [
   { id:'aSettings', label:'Paramètres', icon:'⚙️' },
 ]
 
-function getAllReservations() {
-  const all = []
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i)
-    if (!key?.startsWith(RESERVATIONS_KEY_PREFIX)) continue
-    try { all.push(...JSON.parse(localStorage.getItem(key) || '[]')) } catch {}
-  }
-  return all
-}
-
 export default function DashboardAdmin({ onToast }) {
   const [activeTab, setActiveTab] = useState('aOverview')
   const [selectedRequest, setSelectedRequest] = useState(null)
@@ -58,9 +48,7 @@ export default function DashboardAdmin({ onToast }) {
   // Events
   const [evFilter, setEvFilter] = useState('all')
   const [evSearch, setEvSearch] = useState('')
-  const [evStatuses, setEvStatuses] = useState(() => {
-    const s = {}; EVENTS.forEach(e => { s[e.id] = 'published' }); return s
-  })
+  const [evStatuses, setEvStatuses] = useState({})
   const [evFeatured, setEvFeatured] = useState({})
   // Reservations
   const [resFilter, setResFilter] = useState('all')
@@ -75,36 +63,65 @@ export default function DashboardAdmin({ onToast }) {
   // Orgs sub-tab
   const [orgSubTab, setOrgSubTab] = useState('requests')
 
-  const { user, logout, orgRequests, approveOrgRequest, rejectOrgRequest, getAllUsers, refreshOrgRequests } = useAuth()
+  const { user, logout, orgRequests, approveOrgRequest, rejectOrgRequest, getAllUsers, refreshOrgRequests, loadOrgRequests } = useAuth()
+
+  // API-loaded data
+  const [allUsers, setAllUsers]             = useState([])
+  const [allReservations, setAllReservations] = useState([])
+  const [apiEvents, setApiEvents]           = useState([])
+  const [dataLoaded, setDataLoaded]         = useState(false)
+
+  // Load real data from backend on mount
+  useEffect(() => {
+    loadOrgRequests()
+    getAllUsers().then(u => setAllUsers(u || []))
+    reservationsApi.getAll().then(r => setAllReservations(r || [])).catch(() => {})
+    eventsApi.getAll().then(e => setApiEvents(e || [])).catch(() => {})
+    setDataLoaded(true)
+  }, [])
+
+  // Reload reservations when tab changes to reservations
+  useEffect(() => {
+    if (activeTab === 'aReservations') {
+      reservationsApi.getAll({ status: resFilter !== 'all' ? resFilter : undefined, search: resSearch || undefined })
+        .then(r => setAllReservations(r || [])).catch(() => {})
+    }
+    if (activeTab === 'aUsers') {
+      getAllUsers().then(u => setAllUsers(u || []))
+    }
+  }, [activeTab])
 
   const initials = user?.avatar || 'AT'
-  const pendingCount = orgRequests.filter(r => r.status === 'pending').length
+  const pendingCount  = orgRequests.filter(r => r.status === 'pending').length
   const approvedCount = orgRequests.filter(r => r.status === 'approved').length
   const rejectedCount = orgRequests.filter(r => r.status === 'rejected').length
-  const allUsers = getAllUsers()
-  const allReservations = useMemo(getAllReservations, [activeTab])
 
   const modPendingCount = reportedReviews.filter(r => r.status === 'pending').length + reportedEvents.filter(r => r.status === 'pending').length
 
   const totalRevenue = useMemo(() => {
     let sum = 0
-    allReservations.forEach(r => { const n = parseInt(r.price); if (!isNaN(n)) sum += n })
+    allReservations.forEach(r => { const n = parseFloat(r.price); if (!isNaN(n)) sum += n })
     return sum
   }, [allReservations])
+
+  const displayEvents = apiEvents.length > 0 ? apiEvents : EVENTS
 
   const titles = {
     aOverview: "Vue d'ensemble", aEvents: 'Gestion des événements', aReservations: 'Suivi des réservations',
     aOrgs: 'Organisateurs', aUsers: 'Gestion des utilisateurs', aModeration: 'Modération', aSettings: 'Paramètres',
   }
 
-  const handleApprove = (requestId) => {
-    approveOrgRequest(requestId); refreshOrgRequests()
+  const handleApprove = async (requestId) => {
+    await approveOrgRequest(requestId)
+    await refreshOrgRequests()
+    getAllUsers().then(u => setAllUsers(u || []))
     onToast?.('✅ Demande approuvée !'); setSelectedRequest(null)
   }
   const handleOpenReject = (request) => { setRejectModal(request); setRejectReason('') }
-  const handleConfirmReject = () => {
+  const handleConfirmReject = async () => {
     if (!rejectReason.trim()) return
-    rejectOrgRequest(rejectModal.id, rejectReason); refreshOrgRequests()
+    await rejectOrgRequest(rejectModal.id, rejectReason)
+    await refreshOrgRequests()
     onToast?.('📧 Demande refusée.'); setRejectModal(null); setSelectedRequest(null)
   }
 
@@ -128,16 +145,17 @@ export default function DashboardAdmin({ onToast }) {
   const maxBar = Math.max(...REVENUE_DATA.map(d => d.v))
 
   // Filtered events
-  const filteredEvents = EVENTS.filter(ev => {
-    if (evFilter !== 'all' && evStatuses[ev.id] !== evFilter) return false
-    if (evSearch && !ev.title.toLowerCase().includes(evSearch.toLowerCase()) && !ev.loc.toLowerCase().includes(evSearch.toLowerCase())) return false
+  const filteredEvents = displayEvents.filter(ev => {
+    const st = evStatuses[ev.id] || ev.status || 'published'
+    if (evFilter !== 'all' && st !== evFilter) return false
+    if (evSearch && !ev.title?.toLowerCase().includes(evSearch.toLowerCase()) && !(ev.loc||ev.location||'').toLowerCase().includes(evSearch.toLowerCase())) return false
     return true
   })
 
   // Filtered reservations
   const filteredRes = allReservations.filter(r => {
     if (resFilter !== 'all' && r.status !== resFilter) return false
-    if (resSearch && !r.eventTitle?.toLowerCase().includes(resSearch.toLowerCase()) && !r.id?.toLowerCase().includes(resSearch.toLowerCase())) return false
+    if (resSearch && !(r.event_title||r.event_title || r.eventTitle||'').toLowerCase().includes(resSearch.toLowerCase()) && !(r.ref_code||r.id||'').toLowerCase().includes(resSearch.toLowerCase())) return false
     return true
   })
 
@@ -148,13 +166,17 @@ export default function DashboardAdmin({ onToast }) {
     return true
   })
 
-  const toggleEvStatus = (id) => {
-    setEvStatuses(prev => ({ ...prev, [id]: prev[id] === 'published' ? 'suspended' : 'published' }))
+  const toggleEvStatus = async (id) => {
+    const current = evStatuses[id] || 'published'
+    const newStatus = current === 'published' ? 'suspended' : 'published'
+    setEvStatuses(prev => ({ ...prev, [id]: newStatus }))
+    try { await eventsApi.changeStatus(id, newStatus) } catch {}
     onToast?.(`Statut mis à jour`)
   }
 
-  const toggleFeatured = (id) => {
+  const toggleFeatured = async (id) => {
     setEvFeatured(prev => ({ ...prev, [id]: !prev[id] }))
+    try { await eventsApi.toggleFeatured(id) } catch {}
     onToast?.(evFeatured[id] ? 'Retiré de la une' : '⭐ Mis en avant')
   }
 
@@ -371,17 +393,18 @@ export default function DashboardAdmin({ onToast }) {
                                 </div>
                               </div>
                             </td>
-                            <td><span className="adm-cat-tag">{ev.cat}</span></td>
-                            <td>{ev.loc}</td>
+                            <td><span className="adm-cat-tag">{ev.category || ev.cat}</span></td>
+                            <td>{ev.location || ev.loc}</td>
                             <td>{ev.date}</td>
                             <td style={{ fontWeight:700, color:'var(--lime)' }}>{ev.price}</td>
                             <td>{statusBadge(ev.diff === 'Facile' ? 'published' : ev.diff === 'Modéré' ? 'pending' : 'suspended')}</td>
-                            <td style={{ fontSize:'.78rem' }}>{ev.org}</td>
-                            <td>{statusBadge(evStatuses[ev.id])}</td>
+                            <td style={{ fontSize:'.78rem' }}>{ev.organizer || ev.org}</td>
+                            <td></td>
+                            <td>{statusBadge(evStatuses[ev.id] || ev.status || "published")}</td>
                             <td>
                               <div style={{ display:'flex', gap:4 }}>
-                                <button className="adm-action-btn" title={evStatuses[ev.id]==='published'?'Suspendre':'Publier'} onClick={()=>toggleEvStatus(ev.id)}>
-                                  {evStatuses[ev.id]==='published'?'⏸':'▶'}
+                                <button className="adm-action-btn" title={(evStatuses[ev.id]||ev.status||'published')==='published'?'Suspendre':'Publier'} onClick={()=>toggleEvStatus(ev.id)}>
+                                  {(evStatuses[ev.id]||ev.status||'published')==='published'?'⏸':'▶'}
                                 </button>
                                 <button className={`adm-action-btn${evFeatured[ev.id]?' featured':''}`} title="Mettre en avant" onClick={()=>toggleFeatured(ev.id)}>⭐</button>
                               </div>
@@ -426,11 +449,11 @@ export default function DashboardAdmin({ onToast }) {
                     <table className="dt">
                       <thead><tr><th>Référence</th><th>Client</th><th>Événement</th><th>Date</th><th>Type</th><th>Qté</th><th>Total</th><th>Statut</th></tr></thead>
                       <tbody>
-                        {(filteredRes.length > 0 ? filteredRes : BOOKINGS_TABLE.filter(b => resFilter === 'all' || b.st === resFilter)).map((r,i) => (
+                        {filteredRes.map((r,i) => (
                           <tr key={r.id || r.ref || i}>
                             <td style={{ fontFamily:'monospace', fontSize:'.75rem', color:'var(--lime2)' }}>{r.id || r.ref}</td>
                             <td className="td-main">{r.userName || r.name || '—'}</td>
-                            <td>{r.eventTitle || r.ev}</td>
+                            <td>{r.event_title || r.eventTitle || r.ev}</td>
                             <td>{r.eventDate || r.date}</td>
                             <td>{r.optionLabel || r.tkt || 'Standard'}</td>
                             <td style={{ textAlign:'center' }}>{r.ticketCount || r.qty || 1}</td>
@@ -634,7 +657,7 @@ export default function DashboardAdmin({ onToast }) {
                 {modTab === 'reviews' && (
                   <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
                     {reportedReviews.map(r => (
-                      <div key={r.id} className="adm-report-card">
+                      <div key={r.ref_code || r.id} className="adm-report-card">
                         <div className="adm-report-header">
                           <div>
                             <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:4 }}>
@@ -664,7 +687,7 @@ export default function DashboardAdmin({ onToast }) {
                 {modTab === 'events' && (
                   <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
                     {reportedEvents.map(r => (
-                      <div key={r.id} className="adm-report-card">
+                      <div key={r.ref_code || r.id} className="adm-report-card">
                         <div className="adm-report-header">
                           <div>
                             <div style={{ fontWeight:700, color:'var(--cream)', marginBottom:4 }}>{r.event}</div>

@@ -1,56 +1,87 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { useAuth } from './AuthContext'
+import { cartApi } from '../services/api'
 
 const CartContext = createContext(null)
 
-function cartKey(userId) { return `tuniTrail_cart_${userId}` }
-
 export function CartProvider({ children }) {
   const { user } = useAuth()
-  const [items, setItems] = useState([])
+  const [items, setItems]     = useState([])
+  const [loading, setLoading] = useState(false)
 
-  // Load cart when user changes
-  useEffect(() => {
+  // Normalize API row → cart item shape used by UI
+  const normalize = (row) => ({
+    id: row.product_id,        // product id — used for UI keying
+    cartItemId: row.id,        // cart_items.id — used for API PUT/DELETE
+    name: row.name,
+    price: row.price,
+    price_num: row.price_num,
+    icon: row.icon,
+    cat: row.category,
+    cls: row.css_class,
+    badge: row.badge,
+    badge_cls: row.badge_cls,
+    rating: row.rating,
+    qty: row.quantity,
+  })
+
+  const loadCart = useCallback(async () => {
     if (!user) { setItems([]); return }
+    setLoading(true)
     try {
-      const saved = localStorage.getItem(cartKey(user.id))
-      setItems(saved ? JSON.parse(saved) : [])
+      const rows = await cartApi.get()
+      setItems((rows || []).map(normalize))
     } catch { setItems([]) }
+    finally { setLoading(false) }
   }, [user?.id])
 
-  // Persist cart whenever items change
-  useEffect(() => {
-    if (!user) return
-    localStorage.setItem(cartKey(user.id), JSON.stringify(items))
-  }, [items, user?.id])
+  useEffect(() => { loadCart() }, [loadCart])
 
-  const addItem = (product) => {
+  const addItem = async (product) => {
+    // Optimistic: bump qty if already in cart
     setItems(prev => {
       const existing = prev.find(i => i.id === product.id)
       if (existing) return prev.map(i => i.id === product.id ? { ...i, qty: i.qty + 1 } : i)
-      return [...prev, { ...product, qty: 1 }]
+      return [...prev, { ...product, cartItemId: null, cat: product.cat || product.category, qty: 1 }]
     })
+    try {
+      await cartApi.add(product.id)
+      await loadCart() // sync to get real cartItemId
+    } catch { await loadCart() }
   }
 
-  const removeItem = (id) => setItems(prev => prev.filter(i => i.id !== id))
-
-  const updateQty = (id, delta) => {
-    setItems(prev =>
-      prev.map(i => i.id === id ? { ...i, qty: i.qty + delta } : i).filter(i => i.qty > 0)
-    )
+  const removeItem = async (productId) => {
+    const item = items.find(i => i.id === productId)
+    if (!item || !item.cartItemId) return
+    setItems(prev => prev.filter(i => i.id !== productId))
+    try { await cartApi.remove(item.cartItemId) }
+    catch { await loadCart() }
   }
 
-  const clearCart = () => setItems([])
+  const updateQty = async (productId, delta) => {
+    const item = items.find(i => i.id === productId)
+    if (!item || !item.cartItemId) return
+    const newQty = item.qty + delta
+    if (newQty <= 0) { await removeItem(productId); return }
+    setItems(prev => prev.map(i => i.id === productId ? { ...i, qty: newQty } : i))
+    try { await cartApi.updateQty(item.cartItemId, newQty) }
+    catch { await loadCart() }
+  }
+
+  const clearCart = async () => {
+    setItems([])
+    try { await cartApi.clear() } catch {}
+  }
 
   const total = items.reduce((acc, i) => {
-    const price = parseFloat(String(i.price).replace(/[^0-9.]/g, '')) || 0
+    const price = parseFloat(String(i.price_num || i.price).replace(/[^0-9.]/g, '')) || 0
     return acc + price * i.qty
   }, 0)
 
   const count = items.reduce((acc, i) => acc + i.qty, 0)
 
   return (
-    <CartContext.Provider value={{ items, addItem, removeItem, updateQty, clearCart, total, count }}>
+    <CartContext.Provider value={{ items, loading, addItem, removeItem, updateQty, clearCart, total, count, reload: loadCart }}>
       {children}
     </CartContext.Provider>
   )

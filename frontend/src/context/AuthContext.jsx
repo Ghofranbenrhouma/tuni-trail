@@ -1,189 +1,159 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { authApi, usersApi, orgRequestsApi, setToken, clearToken } from '../services/api'
 
 const AuthContext = createContext(null)
 
-const USERS_KEY = 'tuniTrail_users'
-const SESSION_KEY = 'tuniTrail_session'
-const ORG_REQUESTS_KEY = 'tuniTrail_orgRequests'
+// ── Tiny session persistence: only token + user stored in sessionStorage ─
+// sessionStorage is cleared when browser tab is closed — much safer than localStorage.
+// We do NOT store passwords, full user lists, or org request data there.
+const SESSION_TOKEN_KEY = 'tt_token'
+const SESSION_USER_KEY  = 'tt_user'
 
-const ADMIN_ACCOUNT = {
-  id: 'admin-001',
-  email: 'admin@tunitrail.com',
-  password: 'admin123',
-  name: 'Admin TuniTrail',
-  role: 'admin',
-  avatar: 'AT',
-}
-
-function getUsers() {
+function readSession() {
   try {
-    const users = JSON.parse(localStorage.getItem(USERS_KEY) || '[]')
-    if (!users.find(u => u.email === ADMIN_ACCOUNT.email)) {
-      users.push({ ...ADMIN_ACCOUNT })
-      localStorage.setItem(USERS_KEY, JSON.stringify(users))
-    }
-    return users
-  } catch { return [{ ...ADMIN_ACCOUNT }] }
-}
-function saveUsers(users) {
-  localStorage.setItem(USERS_KEY, JSON.stringify(users))
+    const token = sessionStorage.getItem(SESSION_TOKEN_KEY)
+    const user  = JSON.parse(sessionStorage.getItem(SESSION_USER_KEY) || 'null')
+    return { token, user }
+  } catch { return { token: null, user: null } }
 }
 
-function getOrgRequests() {
-  try { return JSON.parse(localStorage.getItem(ORG_REQUESTS_KEY) || '[]') }
-  catch { return [] }
-}
-function saveOrgRequests(requests) {
-  localStorage.setItem(ORG_REQUESTS_KEY, JSON.stringify(requests))
+function writeSession(token, user) {
+  try {
+    if (token && user) {
+      sessionStorage.setItem(SESSION_TOKEN_KEY, token)
+      sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(user))
+    } else {
+      sessionStorage.removeItem(SESSION_TOKEN_KEY)
+      sessionStorage.removeItem(SESSION_USER_KEY)
+    }
+  } catch {}
 }
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null)
+  const [user, setUser]               = useState(null)
   const [orgRequests, setOrgRequests] = useState([])
+  const [loading, setLoading]         = useState(true)
 
+  // Rehydrate session on first mount
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(SESSION_KEY)
-      if (saved) setUser(JSON.parse(saved))
-    } catch { }
-    getUsers()
-    setOrgRequests(getOrgRequests())
+    const { token, user: savedUser } = readSession()
+    if (token && savedUser) {
+      setToken(token)
+      setUser(savedUser)
+      // Refresh user from backend in background
+      usersApi.getMe()
+        .then(fresh => { setUser(fresh); writeSession(token, fresh) })
+        .catch(() => { /* token may be expired — clear */ clearSession() })
+    }
+    setLoading(false)
   }, [])
 
-  const register = (data) => {
-    const users = getUsers()
-    if (users.find(u => u.email === data.email)) return { error: 'Email déjà utilisé' }
-    const newUser = {
-      id: Date.now().toString(),
-      email: data.email,
-      password: data.password,
-      name: data.name || 'Aventurier',
-      role: data.role || 'user',
-      avatar: (data.name || 'A').slice(0, 2).toUpperCase(),
-    }
-    saveUsers([...users, newUser])
-    const { password: _, ...safe } = newUser
-    setUser(safe)
-    localStorage.setItem(SESSION_KEY, JSON.stringify(safe))
-    return { success: true, user: safe }
+  const clearSession = () => {
+    clearToken()
+    setUser(null)
+    setOrgRequests([])
+    writeSession(null, null)
   }
 
-  const login = (email, password, role) => {
-    if (!email && !password) {
-      const demo = {
-        id: role === 'org' ? 'demo-org' : 'demo-user',
-        email: role === 'org' ? 'org@demo.com' : 'user@demo.com',
-        name: role === 'org' ? 'Tribus Aventure' : 'Ahmed Ben Ali',
-        role, avatar: role === 'org' ? 'TA' : 'AB',
-      }
-      setUser(demo)
-      localStorage.setItem(SESSION_KEY, JSON.stringify(demo))
+  // ── Register ─────────────────────────────────────────────────────────
+  const register = async (data) => {
+    try {
+      const res = await authApi.register(data)
+      setToken(res.token)
+      setUser(res.user)
+      writeSession(res.token, res.user)
+      return { success: true, user: res.user }
+    } catch (err) {
+      return { error: err.message || 'Erreur lors de l\'inscription' }
+    }
+  }
+
+  // ── Login ─────────────────────────────────────────────────────────────
+  const login = async (email, password, role) => {
+    try {
+      const payload = (!email && !password && role) ? { role } : { email, password }
+      const res = await authApi.login(payload)
+      setToken(res.token)
+      setUser(res.user)
+      writeSession(res.token, res.user)
       return { success: true }
-    }
-    const users = getUsers()
-    const found = users.find(u => u.email === email && u.password === password)
-    if (!found) return { error: 'Email ou mot de passe incorrect' }
-    const { password: _, ...safe } = found
-    setUser(safe)
-    localStorage.setItem(SESSION_KEY, JSON.stringify(safe))
-    return { success: true }
-  }
-
-  const logout = () => { setUser(null); localStorage.removeItem(SESSION_KEY) }
-
-  const updateProfile = (updates) => {
-    if (!user) return
-    const users = getUsers()
-    const idx = users.findIndex(u => u.id === user.id)
-    if (idx !== -1) {
-      users[idx] = { ...users[idx], ...updates }
-      saveUsers(users)
-    }
-    const updatedUser = { ...user, ...updates }
-    setUser(updatedUser)
-    localStorage.setItem(SESSION_KEY, JSON.stringify(updatedUser))
-  }
-
-  /* ── Org request management ──────────────────────── */
-
-  const submitOrgRequest = (requestData) => {
-    const requests = getOrgRequests()
-    const existing = requests.find(r => r.userId === requestData.userId && r.status === 'pending')
-    if (existing) return { error: 'Vous avez déjà une demande en attente' }
-
-    const newRequest = {
-      id: 'REQ-' + Date.now(),
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      rejectionReason: null,
-      reviewedAt: null,
-      ...requestData,
-    }
-    const updated = [...requests, newRequest]
-    saveOrgRequests(updated)
-    setOrgRequests(updated)
-    return { success: true }
-  }
-
-  const approveOrgRequest = (requestId) => {
-    const requests = getOrgRequests()
-    const idx = requests.findIndex(r => r.id === requestId)
-    if (idx === -1) return
-
-    requests[idx].status = 'approved'
-    requests[idx].reviewedAt = new Date().toISOString()
-    saveOrgRequests(requests)
-    setOrgRequests([...requests])
-
-    // Upgrade user role to 'org'
-    const users = getUsers()
-    const userIdx = users.findIndex(u => u.id === requests[idx].userId)
-    if (userIdx !== -1) {
-      users[userIdx].role = 'org'
-      saveUsers(users)
+    } catch (err) {
+      return { error: err.message || 'Email ou mot de passe incorrect' }
     }
   }
 
-  const rejectOrgRequest = (requestId, reason) => {
-    const requests = getOrgRequests()
-    const idx = requests.findIndex(r => r.id === requestId)
-    if (idx === -1) return
+  // ── Logout ────────────────────────────────────────────────────────────
+  const logout = () => clearSession()
 
-    requests[idx].status = 'rejected'
-    requests[idx].rejectionReason = reason
-    requests[idx].reviewedAt = new Date().toISOString()
-    saveOrgRequests(requests)
-    setOrgRequests([...requests])
-
-    // Revert user role back to 'user'
-    const users = getUsers()
-    const userIdx = users.findIndex(u => u.id === requests[idx].userId)
-    if (userIdx !== -1) {
-      users[userIdx].role = 'user'
-      saveUsers(users)
+  // ── Update profile ───────────────────────────────────────────────────
+  const updateProfile = async (updates) => {
+    try {
+      const updated = await usersApi.updateMe(updates)
+      setUser(updated)
+      const { token } = readSession()
+      writeSession(token, updated)
+      return { success: true }
+    } catch (err) {
+      return { error: err.message }
     }
   }
 
-  const getMyOrgRequest = () => {
-    if (!user) return null
-    const requests = getOrgRequests()
-    const mine = requests.filter(r => r.userId === user.id)
-    return mine.length > 0 ? mine[mine.length - 1] : null
+  // ── Org requests (loaded lazily when admin/user needs them) ───────────
+  const loadOrgRequests = useCallback(async () => {
+    try {
+      const data = await orgRequestsApi.getAll()
+      setOrgRequests(data || [])
+    } catch {}
+  }, [])
+
+  const refreshOrgRequests = loadOrgRequests
+
+  const submitOrgRequest = async (requestData) => {
+    try {
+      const res = await orgRequestsApi.submit(requestData)
+      return { success: true, data: res }
+    } catch (err) {
+      return { error: err.message }
+    }
   }
 
-  const getAllUsers = () => {
-    return getUsers().map(({ password, ...safe }) => safe)
+  const approveOrgRequest = async (requestId) => {
+    try {
+      await orgRequestsApi.approve(requestId)
+      await loadOrgRequests()
+      return { success: true }
+    } catch (err) {
+      return { error: err.message }
+    }
   }
 
-  const refreshOrgRequests = () => {
-    setOrgRequests(getOrgRequests())
+  const rejectOrgRequest = async (requestId, reason) => {
+    try {
+      await orgRequestsApi.reject(requestId, reason)
+      await loadOrgRequests()
+      return { success: true }
+    } catch (err) {
+      return { error: err.message }
+    }
+  }
+
+  const getMyOrgRequest = async () => {
+    try {
+      return await orgRequestsApi.getMine()
+    } catch { return null }
+  }
+
+  const getAllUsers = async () => {
+    try {
+      return await usersApi.getAll()
+    } catch { return [] }
   }
 
   return (
     <AuthContext.Provider value={{
-      user, login, logout, register, updateProfile,
+      user, loading, login, logout, register, updateProfile,
       orgRequests, submitOrgRequest, approveOrgRequest, rejectOrgRequest,
-      getMyOrgRequest, getAllUsers, refreshOrgRequests,
+      getMyOrgRequest, getAllUsers, refreshOrgRequests, loadOrgRequests,
     }}>
       {children}
     </AuthContext.Provider>

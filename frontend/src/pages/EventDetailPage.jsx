@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext'
 import { useReservations } from '../context/ReservationsContext'
 import { useWishlist } from '../context/WishlistContext'
 import { EVENTS, EVENTS_DETAIL } from '../utils/data'
+import { reviewsApi } from '../services/api'
 import { diffClass } from '../utils/helpers'
 import GoogleMap from '../components/GoogleMap'
 
@@ -374,30 +375,30 @@ export default function EventDetailPage({ eventId, onBack, onToast, onGoReservat
   const [newComment, setNewComment] = useState('')
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(`tuniTrail_reviews_${eventId}`)
-      if (saved) setReviews(JSON.parse(saved))
-    } catch {}
+    if (!eventId) return
+    reviewsApi.getForEvent(eventId)
+      .then(rows => setReviews(rows || []))
+      .catch(() => {})
   }, [eventId])
 
-  const handleSubmitReview = (e) => {
+  const handleSubmitReview = async (e) => {
     e.preventDefault()
     if (!user) { onToast('⚠️ Connectez-vous pour laisser un avis'); return }
-    const rev = {
-      id: Date.now(),
-      userId: user.id,
-      userName: user.name,
-      avatar: user.avatar || user.name?.slice(0, 2).toUpperCase() || '👤',
-      rating: newRating,
-      comment: newComment,
-      date: new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })
+    try {
+      await reviewsApi.create({
+        event_id: eventId,
+        rating: newRating,
+        comment: newComment,
+      })
+      // Reload reviews from backend
+      const rows = await reviewsApi.getForEvent(eventId)
+      setReviews(rows || [])
+      setNewComment('')
+      setNewRating(5)
+      onToast('✅ Votre avis a été publié !')
+    } catch (err) {
+      onToast(`⚠️ Erreur: ${err.message}`)
     }
-    const updated = [rev, ...reviews]
-    setReviews(updated)
-    localStorage.setItem(`tuniTrail_reviews_${eventId}`, JSON.stringify(updated))
-    setNewComment('')
-    setNewRating(5)
-    onToast('✅ Votre avis a été publié !')
   }
 
   if (!event || !detail) return null

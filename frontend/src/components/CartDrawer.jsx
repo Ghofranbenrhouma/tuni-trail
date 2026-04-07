@@ -3,18 +3,19 @@ import { useOrders } from '../context/OrdersContext'
 import { useAuth } from '../context/AuthContext'
 import { useState } from 'react'
 
-// CartDrawer = panier boutique (produits physiques uniquement)
-// Les événements sont réservés via "Réserver" dans Explorer → QR immédiat
 export default function CartDrawer({ open, onClose, onToast }) {
   const { items, removeItem, updateQty, total, count, clearCart } = useCart()
   const { placeOrder } = useOrders()
   const { user } = useAuth()
   const [checkout, setCheckout] = useState(false)
+  const [loading, setLoading] = useState(false)
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (!user) { onToast('⚠️ Connectez-vous pour commander'); return }
-    const order = placeOrder(items, total + 5)
-    clearCart()
+    setLoading(true)
+    const order = await placeOrder(items, total + 5)
+    await clearCart()
+    setLoading(false)
     setCheckout(true)
     onToast(`✓ Commande #${order.id} confirmée !`)
     setTimeout(() => { setCheckout(false); onClose() }, 3000)
@@ -58,7 +59,7 @@ export default function CartDrawer({ open, onClose, onToast }) {
                     </div>
                     <div className="cart-item-body">
                       <div className="cart-item-title">{item.name}</div>
-                      <div className="cart-item-meta">🏷 {item.cat}</div>
+                      <div className="cart-item-meta">🏷 {item.cat || item.category}</div>
                       <div className="cart-item-qty">
                         <button className="qty-btn" onClick={() => updateQty(item.id, -1)}>−</button>
                         <span className="qty-n">{item.qty}</span>
@@ -79,8 +80,8 @@ export default function CartDrawer({ open, onClose, onToast }) {
                 <div className="cart-total-row"><span>Sous-total</span><span>{total.toFixed(0)} DT</span></div>
                 <div className="cart-total-row"><span>Frais de service</span><span>5 DT</span></div>
                 <div className="cart-total-row main"><span>Total</span><span>{(total + 5).toFixed(0)} DT</span></div>
-                <button className="btn-checkout" onClick={handleCheckout}>
-                  Confirmer la commande
+                <button className="btn-checkout" onClick={handleCheckout} disabled={loading}>
+                  {loading ? '⏳ Confirmation...' : 'Confirmer la commande'}
                 </button>
                 <button
                   onClick={() => { clearCart(); onToast('Panier vidé') }}

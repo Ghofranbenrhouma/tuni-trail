@@ -31,8 +31,15 @@ const ALL_ACTIVITIES = [
 
 function OrgRequestStatusBanner() {
   const { user, getMyOrgRequest } = useAuth()
+  const [req, setReq] = useState(null)
+
+  useEffect(() => {
+    if (user && user.role === 'pending_org') {
+      getMyOrgRequest().then(r => setReq(r)).catch(() => {})
+    }
+  }, [user?.id, user?.role])
+
   if (!user || user.role !== 'pending_org') return null
-  const req = getMyOrgRequest()
   if (!req) return null
 
   if (req.status === 'pending') {
@@ -41,7 +48,7 @@ function OrgRequestStatusBanner() {
         <div className="org-status-icon">⏳</div>
         <div className="org-status-body">
           <div className="org-status-title">Demande organisateur en cours d'examen</div>
-          <div className="org-status-text">Votre candidature a été soumise le {new Date(req.createdAt).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}. Un administrateur l'examinera sous 24 à 48h.</div>
+          <div className="org-status-text">Votre candidature a été soumise le {req.created_at ? new Date(req.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' }) : '—'}. Un administrateur l'examinera sous 24 à 48h.</div>
         </div>
       </div>
     )
@@ -111,15 +118,15 @@ export default function DashboardUser({ onToast, onOpenCart }) {
     activities: p.activities.includes(a) ? p.activities.filter(x => x !== a) : [...p.activities, a],
   }))
 
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async () => {
     setProfileSaving(true)
     const fullName = [profileForm.firstName, profileForm.lastName].filter(Boolean).join(' ') || 'Aventurier'
-    updateProfile({
+    await updateProfile({
       name: fullName, email: profileForm.email, phone: profileForm.phone,
       bio: profileForm.bio, activities: profileForm.activities,
       avatar: fullName.slice(0, 2).toUpperCase(),
     })
-    setTimeout(() => { setProfileSaving(false); setEditMode(false); onToast('✅ Profil mis à jour !') }, 600)
+    setProfileSaving(false); setEditMode(false); onToast('✅ Profil mis à jour !')
   }
 
   const handleCancelEdit = () => {
@@ -132,9 +139,9 @@ export default function DashboardUser({ onToast, onOpenCart }) {
 
   const totalCartCount = count + eventCartCount
 
-  const handleCheckout = () => {
-    const order = placeOrder(items, total + 5)
-    clearCart()
+  const handleCheckout = async () => {
+    const order = await placeOrder(items, total + 5)
+    await clearCart()
     onToast(`🎉 Commande #${order.id} confirmée !`)
     setActiveTab('uOrders')
   }

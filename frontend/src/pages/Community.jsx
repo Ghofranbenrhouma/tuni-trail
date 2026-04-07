@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { communityApi } from '../services/api'
 
 const COMMUNITY_POSTS = [
   {
@@ -175,7 +176,14 @@ function renderMessageText(text) {
 
 export default function Community() {
   const { user } = useAuth()
-  const [posts, setPosts] = useState(COMMUNITY_POSTS)
+  const [posts, setPosts] = useState(COMMUNITY_POSTS)  // fallback until API loads
+
+  // Load real posts from backend
+  useEffect(() => {
+    communityApi.getPosts()
+      .then(rows => { if (rows && rows.length > 0) setPosts(rows) })
+      .catch(() => {}) // keep fallback data on error
+  }, [])
   const [messages, setMessages] = useState(CHAT_MESSAGES)
   const [chatInput, setChatInput] = useState('')
   const [uploadCaption, setUploadCaption] = useState('')
@@ -277,12 +285,15 @@ export default function Community() {
     return () => clearInterval(interval)
   }, [])
 
-  const toggleLike = (postId) => {
+  const toggleLike = async (postId) => {
     setPosts(posts.map(post =>
       post.id === postId
-        ? { ...post, liked: !post.liked, likes: post.liked ? post.likes - 1 : post.likes + 1 }
+        ? { ...post, liked: !post.liked, likes_count: (post.likes_count || post.likes || 0) + (post.liked ? -1 : 1) }
         : post
     ))
+    if (user) {
+      try { await communityApi.likePost(postId) } catch {}
+    }
   }
 
   const toggleSave = (postId) => {
@@ -293,7 +304,7 @@ export default function Community() {
     ))
   }
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (chatInput.trim() && user) {
       const newMessage = {
         id: msgIdRef.current++,
@@ -306,6 +317,7 @@ export default function Community() {
       setMessages(prev => [...prev, newMessage])
       setChatInput('')
       resetAITimer()
+      try { await communityApi.sendChat(chatInput.trim()) } catch {}
     }
   }
 

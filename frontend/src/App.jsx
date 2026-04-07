@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import { CartProvider } from './context/CartContext'
 import { WishlistProvider } from './context/WishlistContext'
@@ -19,7 +19,7 @@ import DashboardOrg from './pages/DashboardOrg'
 import DashboardAdmin from './pages/DashboardAdmin'
 
 function AppInner() {
-  const { user } = useAuth()
+  const { user, loading } = useAuth()
   const { toasts, toast } = useToast()
   const [modalOpen, setModalOpen] = useState(false)
   const [cartOpen, setCartOpen] = useState(false)
@@ -30,13 +30,29 @@ function AppInner() {
   const handleGoDestinations = () => setView('destinations')
   const handleGoCommunity = () => setView('community')
 
-  if (user && view === 'landing') {
-    if (user.role === 'admin') setView('admin')
-    else if (user.role === 'org') setView('org')
-    else setView('user') // 'user' and 'pending_org' both go to user dashboard
-  }
-  if (!user && (view === 'user' || view === 'org' || view === 'admin')) {
-    setView('landing')
+  // Redirect after login/logout
+  useEffect(() => {
+    if (loading) return
+    if (user && view === 'landing') {
+      if (user.role === 'admin') setView('admin')
+      else if (user.role === 'org') setView('org')
+      else setView('user')
+    }
+    if (!user && (view === 'user' || view === 'org' || view === 'admin')) {
+      setView('landing')
+    }
+  }, [user, loading])
+
+  // Show a minimal loader while rehydrating session from backend
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: 'var(--bg, #0b0e09)', color: 'var(--fg, #f0ead8)' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '2rem', marginBottom: 12 }}>🏕️</div>
+          <div style={{ opacity: 0.5, fontSize: '0.85rem' }}>Chargement…</div>
+        </div>
+      </div>
+    )
   }
 
   const showNav = view === 'landing' || view === 'store' || view === 'destinations' || view === 'community'
@@ -54,13 +70,13 @@ function AppInner() {
           currentView={view}
         />
       )}
-      {view === 'landing' && <Landing onOpenModal={(type) => setModalOpen(type)} onToast={toast} onGoStore={handleGoStore} />}
-      {view === 'store' && <Store onToast={toast} />}
+      {view === 'landing'      && <Landing onOpenModal={(type) => setModalOpen(type)} onToast={toast} onGoStore={handleGoStore} />}
+      {view === 'store'        && <Store onToast={toast} />}
       {view === 'destinations' && <Destinations />}
-      {view === 'community' && <Community />}
-      {view === 'user' && <DashboardUser onToast={toast} onOpenCart={() => setCartOpen(true)} />}
-      {view === 'org' && <DashboardOrg onToast={toast} />}
-      {view === 'admin' && <DashboardAdmin onToast={toast} />}
+      {view === 'community'    && <Community />}
+      {view === 'user'         && <DashboardUser onToast={toast} onOpenCart={() => setCartOpen(true)} />}
+      {view === 'org'          && <DashboardOrg onToast={toast} />}
+      {view === 'admin'        && <DashboardAdmin onToast={toast} />}
 
       <Modal open={!!modalOpen} initialView={modalOpen || 'login'} onClose={() => setModalOpen(false)} onToast={toast} />
       <CartDrawer open={cartOpen} onClose={() => setCartOpen(false)} onToast={toast} />

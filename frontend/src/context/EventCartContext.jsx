@@ -1,26 +1,12 @@
-import { createContext, useContext, useState, useEffect } from 'react'
-import { useAuth } from './AuthContext'
+// EventCart is kept in-memory only (session state).
+// Event tickets are reserved immediately via the API when the user confirms checkout.
+// No persistence needed between page refreshes for the cart itself.
+import { createContext, useContext, useState } from 'react'
 
 const EventCartContext = createContext(null)
 
-function eventCartKey(userId) { return `tuniTrail_eventCart_${userId}` }
-
 export function EventCartProvider({ children }) {
-  const { user } = useAuth()
   const [eventItems, setEventItems] = useState([])
-
-  useEffect(() => {
-    if (!user) { setEventItems([]); return }
-    try {
-      const saved = localStorage.getItem(eventCartKey(user.id))
-      setEventItems(saved ? JSON.parse(saved) : [])
-    } catch { setEventItems([]) }
-  }, [user?.id])
-
-  useEffect(() => {
-    if (!user) return
-    localStorage.setItem(eventCartKey(user.id), JSON.stringify(eventItems))
-  }, [eventItems, user?.id])
 
   const addEventItem = (event) => {
     setEventItems(prev => {
@@ -36,7 +22,7 @@ export function EventCartProvider({ children }) {
   const clearEventCart = () => setEventItems([])
 
   const eventCartTotal = eventItems.reduce((acc, i) => {
-    const price = parseFloat(String(i.price).replace(/[^0-9.]/g, '')) || 0
+    const price = parseFloat(String(i.price || i.price_num || 0).replace(/[^0-9.]/g, '')) || 0
     return acc + price
   }, 0)
 

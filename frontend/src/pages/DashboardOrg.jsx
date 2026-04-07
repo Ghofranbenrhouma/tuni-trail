@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
+import { eventsApi } from '../services/api'
 import { EVLIST, REVS, BOOKINGS_TABLE, BARD } from '../utils/data'
 import { statusClass, statusLabel } from '../utils/helpers'
-import { verifyQRCode } from '../context/ReservationsContext'
+import { verifyQRCode } from '../context/ReservationsContext'  // now async → hits /api/reservations/verify-qr
 
 const TABS = [
   { id: 'oOverview', label: "Vue d'ensemble", icon: '📊' },
@@ -202,39 +203,7 @@ export default function DashboardOrg({ onToast }) {
 
           {/* CREATE EVENT */}
           {activeTab === 'oCreate' && (
-            <div>
-              <div className="fsec">
-                <div className="fsec-title">Informations générales</div>
-                <div className="fg"><label className="fl">Titre de l'événement</label><input className="fi" placeholder="ex: Camping Zaghouan — Nuit étoilée" /></div>
-                <div className="fg"><label className="fl">Description</label><textarea className="fi fi-ta" placeholder="Décrivez votre aventure..." /></div>
-                <div className="fg3">
-                  <div className="fg"><label className="fl">Catégorie</label>
-                    <select className="fi"><option>Camping</option><option>Trek</option><option>Bivouac</option><option>Escalade</option><option>Kayak</option></select>
-                  </div>
-                  <div className="fg"><label className="fl">Difficulté</label>
-                    <select className="fi"><option>Facile</option><option>Modéré</option><option>Difficile</option></select>
-                  </div>
-                  <div className="fg"><label className="fl">Durée</label><input className="fi" placeholder="ex: 2 jours" /></div>
-                </div>
-                <div className="fg2">
-                  <div className="fg"><label className="fl">Date</label><input className="fi" type="date" /></div>
-                  <div className="fg"><label className="fl">Lieu</label><input className="fi" placeholder="ex: Zaghouan" /></div>
-                </div>
-              </div>
-
-              <div className="fsec">
-                <div className="fsec-title">Tarification & Capacité</div>
-                <div className="fg2">
-                  <div className="fg"><label className="fl">Prix (DT)</label><input className="fi" type="number" placeholder="89" /></div>
-                  <div className="fg"><label className="fl">Capacité max</label><input className="fi" type="number" placeholder="40" /></div>
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', gap: 12 }}>
-                <button className="abtn abtn-p" onClick={() => onToast('Événement publié !')}>Publier l'événement</button>
-                <button className="abtn abtn-g" onClick={() => onToast('Brouillon sauvegardé')}>Sauvegarder brouillon</button>
-              </div>
-            </div>
+            <CreateEventPanel onToast={onToast} onCreated={() => setActiveTab('oEvents')} />
           )}
 
           {/* BOOKINGS */}
@@ -372,6 +341,82 @@ function ToggleSwitch({ defaultOn }) {
   )
 }
 
+function CreateEventPanel({ onToast, onCreated }) {
+  const [form, setForm] = useState({
+    title: '', description: '', category: 'Camping', difficulty: 'Facile',
+    duration: '', date: '', location: '', price: '', capacity: '',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const handleSubmit = async (status) => {
+    if (!form.title || !form.date || !form.location) {
+      onToast('⚠️ Titre, date et lieu sont obligatoires')
+      return
+    }
+    setSaving(true)
+    try {
+      await eventsApi.create({
+        ...form,
+        price: form.price ? `${form.price} DT` : '0 DT',
+        price_num: parseFloat(form.price) || 0,
+        capacity: parseInt(form.capacity) || 0,
+        status,
+      })
+      onToast(status === 'published' ? '✅ Événement publié !' : '💾 Brouillon sauvegardé')
+      onCreated && onCreated()
+    } catch (err) {
+      onToast(`⚠️ Erreur: ${err.message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div>
+      <div className="fsec">
+        <div className="fsec-title">Informations générales</div>
+        <div className="fg"><label className="fl">Titre de l'événement *</label><input className="fi" placeholder="ex: Camping Zaghouan — Nuit étoilée" value={form.title} onChange={e => set('title', e.target.value)} /></div>
+        <div className="fg"><label className="fl">Description</label><textarea className="fi fi-ta" placeholder="Décrivez votre aventure..." value={form.description} onChange={e => set('description', e.target.value)} /></div>
+        <div className="fg3">
+          <div className="fg"><label className="fl">Catégorie</label>
+            <select className="fi" value={form.category} onChange={e => set('category', e.target.value)}>
+              <option>Camping</option><option>Trek</option><option>Bivouac</option><option>Escalade</option><option>Kayak</option>
+            </select>
+          </div>
+          <div className="fg"><label className="fl">Difficulté</label>
+            <select className="fi" value={form.difficulty} onChange={e => set('difficulty', e.target.value)}>
+              <option>Facile</option><option>Modéré</option><option>Difficile</option>
+            </select>
+          </div>
+          <div className="fg"><label className="fl">Durée</label><input className="fi" placeholder="ex: 2 jours" value={form.duration} onChange={e => set('duration', e.target.value)} /></div>
+        </div>
+        <div className="fg2">
+          <div className="fg"><label className="fl">Date *</label><input className="fi" type="date" value={form.date} onChange={e => set('date', e.target.value)} /></div>
+          <div className="fg"><label className="fl">Lieu *</label><input className="fi" placeholder="ex: Zaghouan" value={form.location} onChange={e => set('location', e.target.value)} /></div>
+        </div>
+      </div>
+
+      <div className="fsec">
+        <div className="fsec-title">Tarification & Capacité</div>
+        <div className="fg2">
+          <div className="fg"><label className="fl">Prix (DT)</label><input className="fi" type="number" placeholder="89" value={form.price} onChange={e => set('price', e.target.value)} /></div>
+          <div className="fg"><label className="fl">Capacité max</label><input className="fi" type="number" placeholder="40" value={form.capacity} onChange={e => set('capacity', e.target.value)} /></div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12 }}>
+        <button className="abtn abtn-p" onClick={() => handleSubmit('published')} disabled={saving}>
+          {saving ? '⏳...' : 'Publier l\'événement'}
+        </button>
+        <button className="abtn abtn-g" onClick={() => handleSubmit('draft')} disabled={saving}>
+          Sauvegarder brouillon
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function ScannerPanel({ onToast }) {
   const [val, setVal] = useState('')
   const [res, setRes] = useState(null)
@@ -432,24 +477,24 @@ function ScannerPanel({ onToast }) {
   }
 
   /* ── Verify a raw QR string ───────────────────────── */
-  const handleVerify = (raw) => {
+  const handleVerify = async (raw) => {
     const text = raw || val
     if (!text.trim()) return
 
-    const result = verifyQRCode(text.trim())
+    const result = await verifyQRCode(text.trim())
 
     if (result.valid) {
       const { reservation, payload } = result
       setRes({
         ok: true,
         msg: 'Billet valide — Entrée accordée ✓',
-        det: `${payload.title} · ${reservation.optionLabel || 'Standard'}`,
+        det: `${payload?.title || reservation?.event_title || ''} · ${reservation?.option_label || reservation?.optionLabel || 'Standard'}`,
         extra: [
-          { label: 'Référence', value: reservation.id },
-          { label: 'Participant', value: payload.uname || '—' },
-          { label: 'Date', value: reservation.eventDate || '—' },
-          { label: 'Lieu', value: reservation.eventLoc || '—' },
-          { label: 'Montant', value: reservation.price || '—' },
+          { label: 'Référence', value: reservation?.ref_code || reservation?.id || '—' },
+          { label: 'Participant', value: payload?.uname || reservation?.user_name || '—' },
+          { label: 'Date', value: reservation?.event_date || reservation?.eventDate || '—' },
+          { label: 'Lieu', value: reservation?.event_loc || reservation?.eventLoc || '—' },
+          { label: 'Montant', value: reservation?.price || '—' },
         ],
       })
       onToast('✓ Accès accordé !')
